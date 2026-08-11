@@ -1,5 +1,6 @@
 import os
 import json
+import redis
 import time
 import base64
 import urllib.parse
@@ -19,11 +20,15 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
+UPSTASH_REDIS_URL = os.getenv("UPSTASH_REDIS_URL")
 
 SPOTIFY_GREEN = 0x1DB954
-USER_TOKENS_FILE = os.path.join(os.path.dirname(__file__), "user_tokens.json")
-SONG_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "song_history.json")
 HISTORY_EXPIRY_SECONDS = 48 * 3600  # Keep history for 48 hours (2 days)
+
+# --- Redis Connection ---
+if not UPSTASH_REDIS_URL:
+    raise RuntimeError("UPSTASH_REDIS_URL environment variable is not set! Add it to your .env file.")
+redis_client = redis.from_url(UPSTASH_REDIS_URL, decode_responses=True)
 
 # --- Gemini AI client (async) ---
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -37,45 +42,41 @@ _app_spotify_token_expires: float = 0
 # 1. User Token Storage & Management
 # ==========================================
 def load_user_tokens() -> dict:
-    """Load connected user tokens from user_tokens.json."""
-    if not os.path.exists(USER_TOKENS_FILE):
-        return {}
+    """Load connected user tokens from Redis."""
     try:
-        with open(USER_TOKENS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        data = redis_client.get("user_tokens")
+        if data:
+            return json.loads(data)
     except Exception as e:
-        print(f"Error reading {USER_TOKENS_FILE}: {e}")
-        return {}
+        print(f"Error reading user_tokens from Redis: {e}")
+    return {}
 
 
 def save_user_tokens(tokens: dict):
-    """Save user tokens to user_tokens.json."""
+    """Save user tokens to Redis."""
     try:
-        with open(USER_TOKENS_FILE, "w", encoding="utf-8") as f:
-            json.dump(tokens, f, indent=2)
+        redis_client.set("user_tokens", json.dumps(tokens))
     except Exception as e:
-        print(f"Error saving {USER_TOKENS_FILE}: {e}")
+        print(f"Error saving user_tokens to Redis: {e}")
 
 
 def load_song_history() -> dict:
-    """Load recent song recommendation history per user."""
-    if not os.path.exists(SONG_HISTORY_FILE):
-        return {}
+    """Load recent song recommendation history from Redis."""
     try:
-        with open(SONG_HISTORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        data = redis_client.get("song_history")
+        if data:
+            return json.loads(data)
     except Exception as e:
-        print(f"Error reading {SONG_HISTORY_FILE}: {e}")
-        return {}
+        print(f"Error reading song_history from Redis: {e}")
+    return {}
 
 
 def save_song_history(history: dict):
-    """Save recent song recommendation history."""
+    """Save recent song recommendation history to Redis."""
     try:
-        with open(SONG_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=2)
+        redis_client.set("song_history", json.dumps(history))
     except Exception as e:
-        print(f"Error saving {SONG_HISTORY_FILE}: {e}")
+        print(f"Error saving song_history to Redis: {e}")
 
 
 def get_user_recent_songs(discord_user_id: int) -> list[str]:

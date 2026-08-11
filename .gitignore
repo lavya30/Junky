@@ -2,6 +2,7 @@ venv
 .env
 .claude
 user_tokens.json
+song_history.json
 __pycache__/
 *.pyc
 
