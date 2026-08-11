@@ -652,10 +652,26 @@ async def main():
     await site.start()
     print(f"Spotify OAuth server running on http://{host}:{port}")
 
-    # Start Discord Bot
-    async with bot:
-        await bot.start(TOKEN)
+    # Start Discord Bot with retry logic for rate limits
+    max_retries = 10
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with bot:
+                await bot.start(TOKEN)
+        except discord.HTTPException as e:
+            if e.status == 429:
+                wait_time = min(30 * attempt, 300)  # 30s, 60s, 90s... up to 5 min
+                print(f"⚠️  Rate limited by Discord (attempt {attempt}/{max_retries}). Waiting {wait_time}s...")
+                await asyncio.sleep(wait_time)
+            else:
+                print(f"❌ Discord HTTP error: {e}")
+                raise
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+            raise
+    print("❌ Failed to connect after all retries.")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
