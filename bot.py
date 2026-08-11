@@ -468,18 +468,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    try:
-        # Copy global commands to each server the bot is in for INSTANT Discord command updates
-        for guild in bot.guilds:
-            bot.tree.copy_global_to(guild=guild)
-            synced_guild = await bot.tree.sync(guild=guild)
-            print(f"✅ Instantly synced {len(synced_guild)} commands to server: {guild.name}")
-        
-        # Also sync globally
-        synced = await bot.tree.sync()
-        print(f"✅ Globally synced {len(synced)} slash commands!")
-    except Exception as e:
-        print(f"❌ Error syncing commands: {e}")
+    print(f"Connected to {len(bot.guilds)} server(s)")
+    print("Use /sync command to sync slash commands when needed.")
 
 
 @bot.tree.command(name="sync", description="Sync slash commands (bot owner only)")
