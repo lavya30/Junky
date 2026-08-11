@@ -223,6 +223,14 @@ async def get_user_top_music(discord_user_id: int) -> dict | None:
 # ==========================================
 # 3. Gemini AI Recommendation Engine
 # ==========================================
+GEMINI_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+]
+
+
 async def ask_ai_for_song(
     display_name: str,
     username: str,
@@ -262,28 +270,32 @@ Rules:
 Respond ONLY with valid JSON:
 {{"search_query": "Song Title Artist Name", "message": "your witty one-liner here"}}"""
 
-    try:
-        response = await gemini_client.aio.models.generate_content(
-            model="gemini-flash-latest",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=1.0,
-                response_mime_type="application/json",
-            ),
-        )
-        text = response.text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-        return json.loads(text)
-    except Exception as e:
-        print(f"Gemini error: {e}")
-        return {
-            "search_query": display_name,
-            "message": "AI took a nap, but here's what Spotify found! 🤷",
-        }
+    for model_name in GEMINI_MODELS:
+        try:
+            response = await gemini_client.aio.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=1.0,
+                    response_mime_type="application/json",
+                ),
+            )
+            text = response.text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+            return json.loads(text)
+        except Exception as e:
+            print(f"Gemini error on model '{model_name}': {e}")
+            continue
+
+    print("All Gemini models failed. Falling back to default search.")
+    return {
+        "search_query": display_name,
+        "message": "AI took a nap, but here's what Spotify found! 🤷",
+    }
 
 
 # ==========================================
