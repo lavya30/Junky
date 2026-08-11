@@ -1,7 +1,6 @@
 import os
 import json
 import time
-import random
 import base64
 import urllib.parse
 import asyncio
@@ -217,66 +216,48 @@ async def get_user_top_music(discord_user_id: int) -> dict | None:
 # ==========================================
 # 3. Gemini AI Recommendation Engine
 # ==========================================
-VIBES_LIST = [
-    "Over-the-top dramatic Bollywood breakup or party banger",
-    "Goofy 90s/2000s cartoon or anime theme song",
-    "Extreme bass-boosted Punjabi / desi flex anthem",
-    "80s dramatic stadium rock or hair metal ballad",
-    "Unhinged viral internet meme track",
-    "Main character energy pop star anthem",
-    "Cheesy romantic song that screams irony",
-    "Silly nursery rhyme or comedic parody song",
-    "High-energy hip-hop hype anthem",
-    "Iconic South Indian cinematic banger",
-]
-
-PERSONALIZED_ANGLES = [
-    "A hidden gem banger matching their top artists' vibe",
-    "A playful comedic roast song contrasting their most-played artist",
-    "A high-energy party track their favorite artist would feature on",
-    "A nostalgic anthem matching the mood of their top tracks",
-    "An unexpected crossover track that fits their music taste perfectly",
-]
-
-
 async def ask_ai_for_song(
     display_name: str,
     username: str,
     user_music: dict | None = None,
 ) -> dict:
-    """Ask Gemini AI to pick a highly creative, unique song based on Spotify taste or username."""
+    """Ask Gemini AI to pick a song based on Spotify taste or username."""
     if user_music and (user_music.get("top_artists") or user_music.get("top_tracks")):
         artists_str = ", ".join(user_music.get("top_artists", [])) or "None listed"
         tracks_str = "; ".join(user_music.get("top_tracks", [])) or "None listed"
-        angle = random.choice(PERSONALIZED_ANGLES)
 
-        prompt = f"""You are Junky, a hilarious, witty, music-obsessed Discord bot.
-User tagged: {display_name} (@{username})
-Their real Spotify listening data:
+        prompt = f"""You are a witty Discord music bot. A user tagged {display_name} (@{username}).
+Here is what {display_name} actually listens to on Spotify:
 - Top Artists: {artists_str}
 - Top Tracks: {tracks_str}
 
-Direction for this suggestion: {angle}
+Your job: Pick a song from Spotify that gives a personalized, clever, or funny recommendation tailored to their real music taste.
+You can either recommend a song that matches their vibe perfectly, or make a playful humorous comment about their top artists/tracks.
 
 Rules:
-1. Pick a REAL, searchable song on Spotify matching this direction.
-2. Be fresh, bold, and funny. Avoid repeating obvious or generic choices.
-3. Write a punchy witty comment (under 15 words) explaining the roast or recommendation.
-4. Output ONLY JSON:
-{{"search_query": "Track Title Artist Name", "message": "your witty roast/comment here"}}"""
+- Pick a REAL song that exists on Spotify
+- ANTI-REPETITION: Do NOT pick generic or repetitive songs. Be fresh, bold, and unique!
+- Write a short witty one-liner (max 15 words) explaining why this song fits their taste or vibe
+- Prefer popular/well-known songs so they're easy to find on Spotify
+
+Respond ONLY with valid JSON, no markdown, no code fences:
+{{"search_query": "song name artist name", "message": "your witty one-liner here"}}"""
     else:
-        vibe = random.choice(VIBES_LIST)
+        prompt = f"""You are a funny Discord music bot. A user just tagged someone with the following Discord profile:
+- Display name: "{display_name}"
+- Username: "{username}"
 
-        prompt = f"""You are Junky, a hilarious, witty Discord music bot.
-User tagged: {display_name} (@{username})
-Angle for this recommendation: {vibe}
+Your job: Pick a song from Spotify that is funny, ironic, or fitting for this person based on their name, personality vibe, or wordplay.
 
 Rules:
-1. Pick a REAL, searchable song on Spotify matching this angle and playfully teasing or matching the user.
-2. NEVER repeat generic title songs (like searching someone's name as a title). Be witty, sarcastic, or culturally clever!
-3. Write a punchy witty one-liner roast (under 15 words).
-4. Output ONLY JSON:
-{{"search_query": "Track Title Artist Name", "message": "your witty roast/comment here"}}"""
+- Pick a REAL song that exists on Spotify
+- ANTI-REPETITION: NEVER pick generic songs with the user's name as the title. Explore diverse genres (Bollywood, Punjabi, Hip-Hop, Pop, Rock, Memes, Anime, Classics).
+- The song should be funny, sarcastic, or clever
+- Write a short witty one-liner (max 15 words) explaining why this song fits them
+- Prefer popular/well-known songs so they're easy to find on Spotify
+
+Respond ONLY with valid JSON, no markdown, no code fences:
+{{"search_query": "song name artist name", "message": "your witty one-liner here"}}"""
 
     try:
         response = await gemini_client.aio.models.generate_content(
@@ -298,7 +279,7 @@ Rules:
         print(f"Gemini error: {e}")
         return {
             "search_query": display_name,
-            "message": "AI took a nap, but here's a random track for you! 🤷",
+            "message": "AI took a nap, but here's a track for you! 🤷",
         }
 
 
