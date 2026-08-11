@@ -22,6 +22,8 @@ SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/
 
 SPOTIFY_GREEN = 0x1DB954
 USER_TOKENS_FILE = os.path.join(os.path.dirname(__file__), "user_tokens.json")
+SONG_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "song_history.json")
+HISTORY_EXPIRY_SECONDS = 48 * 3600  # Keep history for 48 hours (2 days)
 
 # --- Gemini AI client (async) ---
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -53,6 +55,61 @@ def save_user_tokens(tokens: dict):
             json.dump(tokens, f, indent=2)
     except Exception as e:
         print(f"Error saving {USER_TOKENS_FILE}: {e}")
+
+
+def load_song_history() -> dict:
+    """Load recent song recommendation history per user."""
+    if not os.path.exists(SONG_HISTORY_FILE):
+        return {}
+    try:
+        with open(SONG_HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error reading {SONG_HISTORY_FILE}: {e}")
+        return {}
+
+
+def save_song_history(history: dict):
+    """Save recent song recommendation history."""
+    try:
+        with open(SONG_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"Error saving {SONG_HISTORY_FILE}: {e}")
+
+
+def get_user_recent_songs(discord_user_id: int) -> list[str]:
+    """Return a list of track names/artists recommended to this user within the last 48 hours."""
+    history = load_song_history()
+    user_str = str(discord_user_id)
+    records = history.get(user_str, [])
+    now = time.time()
+
+    valid_records = [
+        r for r in records
+        if isinstance(r, dict) and (now - r.get("timestamp", 0) < HISTORY_EXPIRY_SECONDS)
+    ]
+    return [r.get("song") for r in valid_records if r.get("song")]
+
+
+def add_user_recent_song(discord_user_id: int, song_entry: str):
+    """Record a recommended song for a user with the current timestamp."""
+    history = load_song_history()
+    user_str = str(discord_user_id)
+    records = history.get(user_str, [])
+    now = time.time()
+
+    valid_records = [
+        r for r in records
+        if isinstance(r, dict) and (now - r.get("timestamp", 0) < HISTORY_EXPIRY_SECONDS)
+    ]
+    valid_records.append({
+        "song": song_entry,
+        "timestamp": now,
+    })
+    # Keep up to last 30 entries
+    history[user_str] = valid_records[-30:]
+    save_song_history(history)
 
 
 async def get_valid_user_token(discord_user_id: int) -> str | None:
@@ -135,33 +192,53 @@ async def get_app_spotify_token() -> str:
             return _app_spotify_token
 
 
-async def search_spotify(query: str) -> dict | None:
+async def search_spotify(query: str, exclude_songs: list[str] | None = None) -> dict | None:
     """Search Spotify for a track. Returns {url, title, artist, thumbnail} or None."""
     token = await get_app_spotify_token()
+    if not token:
+        return None
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(
-            "https://api.spotify.com/v1/search",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"q": query, "type": "track", "limit": 1, "market": "IN"},
-        ) as resp:
-            if resp.status != 200:
-                return None
-            data = await resp.json()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.spotify.com/v1/search",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"q": query, "type": "track", "limit": 5, "market": "IN"},
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+    except Exception as e:
+        print(f"Error querying Spotify search: {e}")
+        return None
 
     tracks = data.get("tracks", {}).get("items", [])
     if not tracks:
         return None
 
-    track = tracks[0]
-    artists = ", ".join(a["name"] for a in track.get("artists", []))
+    exclude_lower = [s.lower() for s in (exclude_songs or [])]
+    chosen_track = None
+
+    if exclude_lower:
+        for t in tracks:
+            t_name = t["name"].lower()
+            t_artists = " ".join(a["name"].lower() for a in t.get("artists", []))
+            combined = f"{t_name} by {t_artists}"
+            if not any(ex in combined or ex in t_name or t_name in ex for ex in exclude_lower):
+                chosen_track = t
+                break
+
+    if not chosen_track:
+        chosen_track = tracks[0]
+
+    artists = ", ".join(a["name"] for a in chosen_track.get("artists", []))
     thumbnail = ""
-    if track.get("album", {}).get("images"):
-        thumbnail = track["album"]["images"][0]["url"]
+    if chosen_track.get("album", {}).get("images"):
+        thumbnail = chosen_track["album"]["images"][0]["url"]
 
     return {
-        "url": track["external_urls"]["spotify"],
-        "title": track["name"],
+        "url": chosen_track["external_urls"]["spotify"],
+        "title": chosen_track["name"],
         "artist": artists,
         "thumbnail": thumbnail,
     }
@@ -235,8 +312,11 @@ async def ask_ai_for_song(
     display_name: str,
     username: str,
     user_music: dict | None = None,
+    recent_songs: list[str] | None = None,
 ) -> dict:
     """Ask Gemini AI to deeply analyze Spotify history & taste to pick a tailored song."""
+    recent_str = "; ".join(recent_songs[-15:]) if recent_songs else "None"
+
     if user_music and (user_music.get("top_artists") or user_music.get("top_tracks")):
         artists_str = ", ".join(user_music.get("top_artists", [])) or "None listed"
         tracks_str = "; ".join(user_music.get("top_tracks", [])) or "None listed"
@@ -249,11 +329,15 @@ User's Spotify History:
 - Favorite Genres: {genres_str}
 - Top Artists: {artists_str}
 - Most Played Tracks: {tracks_str}
+- Recently Recommended Tracks (DO NOT REPEAT): {recent_str}
 
 Your Mission:
 1. Deeply analyze their music taste, favorite genres, and musical vibes from the list above.
 2. Recommend a FRESH, fantastic song that perfectly fits their musical taste (like an artist they'd love, a related banger, or a hidden gem).
-3. Important: Do NOT pick a song already listed in their Top Tracks — pick something new for them to discover!
+3. CRITICAL ANTI-REPETITION RULES:
+   - Do NOT pick any song already listed in their Top Tracks!
+   - Do NOT pick any song or artist listed in Recently Recommended Tracks (strictly forbidden)!
+   - Explore fresh variety: try different related artists, underground gems, or adjacent subgenres that match the aesthetic.
 4. Write a witty, clever 10-15 word comment connecting the song to their favorite artists/genres.
 
 Respond ONLY with valid JSON:
@@ -262,9 +346,12 @@ Respond ONLY with valid JSON:
         prompt = f"""You are a witty Discord music bot. A user tagged {display_name} (@{username}).
 Pick a funny, ironic, or fitting song for this person based on their name, personality vibe, or clever wordplay.
 
+Recently Recommended Songs for this user (DO NOT REPEAT): {recent_str}
+
 Rules:
 - Pick a REAL song that exists on Spotify
 - Avoid generic songs with the user's name as the title — explore diverse genres (Bollywood, Punjabi, Hip-Hop, Pop, Rock, Memes, Anime).
+- CRITICAL: Do NOT repeat any song from the Recently Recommended list above! Pick something completely new and surprising.
 - Write a short witty one-liner (max 15 words) explaining why this song fits them
 
 Respond ONLY with valid JSON:
@@ -276,7 +363,7 @@ Respond ONLY with valid JSON:
                 model=model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=1.0,
+                    temperature=1.15,
                     response_mime_type="application/json",
                 ),
             )
@@ -467,25 +554,30 @@ async def song(interaction: discord.Interaction, user: discord.Member):
         # Step 1: Check if tagged user has connected their Spotify
         user_music = await get_user_top_music(user.id)
         is_personalized = user_music is not None
+        recent_songs = get_user_recent_songs(user.id)
 
         # Step 2: Ask Gemini AI to pick a song
         ai_result = await ask_ai_for_song(
             display_name=user.display_name,
             username=user.name,
             user_music=user_music,
+            recent_songs=recent_songs,
         )
 
         search_query = ai_result.get("search_query", user.display_name)
         ai_message = ai_result.get("message", "")
 
         # Step 3: Search Spotify for the AI's recommended song
-        track = await search_spotify(search_query)
+        track = await search_spotify(search_query, exclude_songs=recent_songs)
 
         if not track:
             await interaction.followup.send(
                 f"🤖 AI picked \"{search_query}\" for {user.mention} but couldn't find it on Spotify! 😅",
             )
             return
+
+        # Save to user's recent recommendation history
+        add_user_recent_song(user.id, f"{track['title']} by {track['artist']}")
 
         # Step 4: Build the embed
         footer_text = (
