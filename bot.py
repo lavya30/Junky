@@ -461,164 +461,161 @@ async def handle_spotify_callback(request: web.Request) -> web.Response:
 # ==========================================
 # 5. Discord Bot & Slash Commands
 # ==========================================
-intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
+def create_bot() -> commands.Bot:
+    intents = discord.Intents.default()
+    bot = commands.Bot(command_prefix="!", intents=intents)
 
+    @bot.event
+    async def on_ready():
+        print(f"Logged in as {bot.user}")
+        print(f"Connected to {len(bot.guilds)} server(s)")
+        print("Use /sync command to sync slash commands when needed.")
 
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user}")
-    print(f"Connected to {len(bot.guilds)} server(s)")
-    print("Use /sync command to sync slash commands when needed.")
-
-
-@bot.tree.command(name="sync", description="Sync slash commands (bot owner only)")
-async def sync_commands(interaction: discord.Interaction):
-    """Run /sync once after adding/changing commands. Not needed every restart."""
-    if interaction.user.id != (await bot.application_info()).owner.id:
-        await interaction.response.send_message("Only the bot owner can sync.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    synced = await bot.tree.sync()
-    await interaction.followup.send(f"Synced {len(synced)} commands.", ephemeral=True)
-
-
-@bot.tree.command(name="connect", description="Connect your Spotify account for personalized AI music suggestions")
-async def connect(interaction: discord.Interaction):
-    """Send an ephemeral link for user to authorize their Spotify account."""
-    params = {
-        "client_id": SPOTIFY_CLIENT_ID,
-        "response_type": "code",
-        "redirect_uri": SPOTIFY_REDIRECT_URI,
-        "scope": "user-top-read",
-        "state": str(interaction.user.id),
-        "show_dialog": "true",
-    }
-    auth_url = f"https://accounts.spotify.com/authorize?{urllib.parse.urlencode(params)}"
-
-    view = discord.ui.View()
-    view.add_item(discord.ui.Button(
-        label="🔗 Authorize Spotify",
-        style=discord.ButtonStyle.link,
-        url=auth_url,
-        emoji="🎵",
-    ))
-
-    embed = discord.Embed(
-        title="Connect your Spotify",
-        description=(
-            "Click the button below to connect your Spotify account.\n"
-            "This lets **Junky** read your top artists & tracks to give you personalized song suggestions!"
-        ),
-        color=SPOTIFY_GREEN,
-    )
-    embed.set_footer(text="🔒 Only you can see this message.")
-
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-
-@bot.tree.command(name="disconnect", description="Disconnect your Spotify account from the bot")
-async def disconnect(interaction: discord.Interaction):
-    """Disconnect user's Spotify account."""
-    tokens = load_user_tokens()
-    user_str = str(interaction.user.id)
-
-    if user_str in tokens:
-        del tokens[user_str]
-        save_user_tokens(tokens)
-        await interaction.response.send_message(
-            "✅ Your Spotify account has been disconnected.", ephemeral=True
-        )
-    else:
-        await interaction.response.send_message(
-            "You don't have a Spotify account connected.", ephemeral=True
-        )
-
-
-@bot.tree.command(name="song", description="AI picks a personalized song for the tagged user")
-@app_commands.describe(user="The person to get music for")
-async def song(interaction: discord.Interaction, user: discord.Member):
-    # Defer immediately — AI + Spotify API calls take a moment
-    await interaction.response.defer()
-
-    try:
-        # Step 1: Check if tagged user has connected their Spotify
-        user_music = await get_user_top_music(user.id)
-        is_personalized = user_music is not None
-        recent_songs = get_user_recent_songs(user.id)
-
-        # Step 2: Ask Gemini AI to pick a song
-        ai_result = await ask_ai_for_song(
-            display_name=user.display_name,
-            username=user.name,
-            user_music=user_music,
-            recent_songs=recent_songs,
-        )
-
-        search_query = ai_result.get("search_query", user.display_name)
-        ai_message = ai_result.get("message", "")
-
-        # Step 3: Search Spotify for the AI's recommended song
-        track = await search_spotify(search_query, exclude_songs=recent_songs)
-
-        if not track:
-            await interaction.followup.send(
-                f"🤖 AI picked \"{search_query}\" for {user.mention} but couldn't find it on Spotify! 😅",
-            )
+    @bot.tree.command(name="sync", description="Sync slash commands (bot owner only)")
+    async def sync_commands(interaction: discord.Interaction):
+        """Run /sync once after adding/changing commands. Not needed every restart."""
+        if interaction.user.id != (await bot.application_info()).owner.id:
+            await interaction.response.send_message("Only the bot owner can sync.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
+        synced = await bot.tree.sync()
+        await interaction.followup.send(f"Synced {len(synced)} commands.", ephemeral=True)
 
-        # Save to user's recent recommendation history
-        add_user_recent_song(user.id, f"{track['title']} by {track['artist']}")
+    @bot.tree.command(name="connect", description="Connect your Spotify account for personalized AI music suggestions")
+    async def connect(interaction: discord.Interaction):
+        """Send an ephemeral link for user to authorize their Spotify account."""
+        params = {
+            "client_id": SPOTIFY_CLIENT_ID,
+            "response_type": "code",
+            "redirect_uri": SPOTIFY_REDIRECT_URI,
+            "scope": "user-top-read",
+            "state": str(interaction.user.id),
+            "show_dialog": "true",
+        }
+        auth_url = f"https://accounts.spotify.com/authorize?{urllib.parse.urlencode(params)}"
 
-        # Step 4: Build the embed
-        footer_text = (
-            "✨ Personalized based on Spotify taste • Spotify"
-            if is_personalized
-            else "🤖 Based on username (use /connect for personalized) • Spotify"
-        )
-
-        embed = discord.Embed(
-            title=f"{track['title']} — {track['artist']}",
-            url=track["url"],
-            description=f"*{ai_message}*" if ai_message else f"For {user.mention}",
-            color=SPOTIFY_GREEN,
-        )
-        if track.get("thumbnail"):
-            embed.set_thumbnail(url=track["thumbnail"])
-        embed.set_footer(
-            text=footer_text,
-            icon_url="https://storage.googleapis.com/pr-newsroom-wp/1/2023/05/Spotify_Primary_Logo_RGB_Green.png",
-        )
-
-        # Add a clickable "Play on Spotify" button
         view = discord.ui.View()
         view.add_item(discord.ui.Button(
-            label="▶ Play on Spotify",
+            label="🔗 Authorize Spotify",
             style=discord.ButtonStyle.link,
-            url=track["url"],
-            emoji="🎧",
+            url=auth_url,
+            emoji="🎵",
         ))
 
-        await interaction.followup.send(
-            content=f"🎵 For {user.mention}:",
-            embed=embed,
-            view=view,
+        embed = discord.Embed(
+            title="Connect your Spotify",
+            description=(
+                "Click the button below to connect your Spotify account.\n"
+                "This lets **Junky** read your top artists & tracks to give you personalized song suggestions!"
+            ),
+            color=SPOTIFY_GREEN,
         )
+        embed.set_footer(text="🔒 Only you can see this message.")
 
-    except Exception as e:
-        print(f"Error in /song: {e}")
-        await interaction.followup.send(
-            f"Something went wrong picking a song for {user.mention}! 😅 Try again.",
-        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+    @bot.tree.command(name="disconnect", description="Disconnect your Spotify account from the bot")
+    async def disconnect(interaction: discord.Interaction):
+        """Disconnect user's Spotify account."""
+        tokens = load_user_tokens()
+        user_str = str(interaction.user.id)
 
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error):
-    """Gracefully handle interaction errors."""
-    if isinstance(error.__cause__, discord.NotFound):
-        print(f"Interaction expired for /{interaction.command.name} — Discord took too long.")
-    else:
-        print(f"Error in /{interaction.command.name}: {error}")
+        if user_str in tokens:
+            del tokens[user_str]
+            save_user_tokens(tokens)
+            await interaction.response.send_message(
+                "✅ Your Spotify account has been disconnected.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "You don't have a Spotify account connected.", ephemeral=True
+            )
+
+    @bot.tree.command(name="song", description="AI picks a personalized song for the tagged user")
+    @app_commands.describe(user="The person to get music for")
+    async def song(interaction: discord.Interaction, user: discord.Member):
+        # Defer immediately — AI + Spotify API calls take a moment
+        await interaction.response.defer()
+
+        try:
+            # Step 1: Check if tagged user has connected their Spotify
+            user_music = await get_user_top_music(user.id)
+            is_personalized = user_music is not None
+            recent_songs = get_user_recent_songs(user.id)
+
+            # Step 2: Ask Gemini AI to pick a song
+            ai_result = await ask_ai_for_song(
+                display_name=user.display_name,
+                username=user.name,
+                user_music=user_music,
+                recent_songs=recent_songs,
+            )
+
+            search_query = ai_result.get("search_query", user.display_name)
+            ai_message = ai_result.get("message", "")
+
+            # Step 3: Search Spotify for the AI's recommended song
+            track = await search_spotify(search_query, exclude_songs=recent_songs)
+
+            if not track:
+                await interaction.followup.send(
+                    f"🤖 AI picked \"{search_query}\" for {user.mention} but couldn't find it on Spotify! 😅",
+                )
+                return
+
+            # Save to user's recent recommendation history
+            add_user_recent_song(user.id, f"{track['title']} by {track['artist']}")
+
+            # Step 4: Build the embed
+            footer_text = (
+                "✨ Personalized based on Spotify taste • Spotify"
+                if is_personalized
+                else "🤖 Based on username (use /connect for personalized) • Spotify"
+            )
+
+            embed = discord.Embed(
+                title=f"{track['title']} — {track['artist']}",
+                url=track["url"],
+                description=f"*{ai_message}*" if ai_message else f"For {user.mention}",
+                color=SPOTIFY_GREEN,
+            )
+            if track.get("thumbnail"):
+                embed.set_thumbnail(url=track["thumbnail"])
+            embed.set_footer(
+                text=footer_text,
+                icon_url="https://storage.googleapis.com/pr-newsroom-wp/1/2023/05/Spotify_Primary_Logo_RGB_Green.png",
+            )
+
+            # Add a clickable "Play on Spotify" button
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(
+                label="▶ Play on Spotify",
+                style=discord.ButtonStyle.link,
+                url=track["url"],
+                emoji="🎧",
+            ))
+
+            await interaction.followup.send(
+                content=f"🎵 For {user.mention}:",
+                embed=embed,
+                view=view,
+            )
+
+        except Exception as e:
+            print(f"Error in /song: {e}")
+            await interaction.followup.send(
+                f"Something went wrong picking a song for {user.mention}! 😅 Try again.",
+            )
+
+    @bot.tree.error
+    async def on_app_command_error(interaction: discord.Interaction, error):
+        """Gracefully handle interaction errors."""
+        if isinstance(error.__cause__, discord.NotFound):
+            print(f"Interaction expired for /{interaction.command.name} — Discord took too long.")
+        else:
+            print(f"Error in /{interaction.command.name}: {error}")
+
+    return bot
 
 
 async def handle_home(request: web.Request) -> web.Response:
@@ -653,22 +650,30 @@ async def main():
     print(f"Spotify OAuth server running on http://{host}:{port}")
 
     # Start Discord Bot with retry logic for rate limits
-    max_retries = 10
+    max_retries = 15
     for attempt in range(1, max_retries + 1):
+        bot = create_bot()
         try:
             async with bot:
                 await bot.start(TOKEN)
+            break
         except discord.HTTPException as e:
             if e.status == 429:
                 wait_time = min(30 * attempt, 300)  # 30s, 60s, 90s... up to 5 min
-                print(f"⚠️  Rate limited by Discord (attempt {attempt}/{max_retries}). Waiting {wait_time}s...")
+                print(f"⚠️  Rate limited by Discord (attempt {attempt}/{max_retries}). Waiting {wait_time}s before retry...")
                 await asyncio.sleep(wait_time)
             else:
                 print(f"❌ Discord HTTP error: {e}")
                 raise
         except Exception as e:
-            print(f"❌ Unexpected error: {e}")
-            raise
+            err_msg = str(e).lower()
+            if "429" in err_msg or "rate limit" in err_msg or "session is closed" in err_msg:
+                wait_time = min(30 * attempt, 300)
+                print(f"⚠️  Connection error ({e}) (attempt {attempt}/{max_retries}). Waiting {wait_time}s before retry...")
+                await asyncio.sleep(wait_time)
+            else:
+                print(f"❌ Unexpected error: {e}")
+                raise
     print("❌ Failed to connect after all retries.")
 
 
