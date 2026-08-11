@@ -168,7 +168,7 @@ async def search_spotify(query: str) -> dict | None:
 
 
 async def get_user_top_music(discord_user_id: int) -> dict | None:
-    """Fetch user's top artists and top tracks using their connected Spotify account."""
+    """Fetch user's top artists, top tracks, and musical genres from Spotify."""
     token = await get_valid_user_token(discord_user_id)
     if not token:
         return None
@@ -177,23 +177,29 @@ async def get_user_top_music(discord_user_id: int) -> dict | None:
         async with aiohttp.ClientSession() as session:
             headers = {"Authorization": f"Bearer {token}"}
 
-            # Fetch top artists
+            # Fetch top artists and extract their genres
             artists = []
+            genres = []
             async with session.get(
                 "https://api.spotify.com/v1/me/top/artists",
                 headers=headers,
-                params={"limit": 5, "time_range": "medium_term"},
+                params={"limit": 8, "time_range": "medium_term"},
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    artists = [a["name"] for a in data.get("items", [])]
+                    for a in data.get("items", []):
+                        artists.append(a["name"])
+                        genres.extend(a.get("genres", []))
+
+            # Deduplicate genres (take top 6 most common)
+            top_genres = list(dict.fromkeys(genres))[:6]
 
             # Fetch top tracks
             tracks = []
             async with session.get(
                 "https://api.spotify.com/v1/me/top/tracks",
                 headers=headers,
-                params={"limit": 5, "time_range": "medium_term"},
+                params={"limit": 8, "time_range": "medium_term"},
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -207,6 +213,7 @@ async def get_user_top_music(discord_user_id: int) -> dict | None:
             return {
                 "top_artists": artists,
                 "top_tracks": tracks,
+                "top_genres": top_genres,
             }
     except Exception as e:
         print(f"Error fetching user music for {discord_user_id}: {e}")
@@ -221,50 +228,46 @@ async def ask_ai_for_song(
     username: str,
     user_music: dict | None = None,
 ) -> dict:
-    """Ask Gemini AI to pick a song based on Spotify taste or username."""
+    """Ask Gemini AI to deeply analyze Spotify history & taste to pick a tailored song."""
     if user_music and (user_music.get("top_artists") or user_music.get("top_tracks")):
         artists_str = ", ".join(user_music.get("top_artists", [])) or "None listed"
         tracks_str = "; ".join(user_music.get("top_tracks", [])) or "None listed"
+        genres_str = ", ".join(user_music.get("top_genres", [])) or "Diverse genres"
 
-        prompt = f"""You are a witty Discord music bot. A user tagged {display_name} (@{username}).
-Here is what {display_name} actually listens to on Spotify:
+        prompt = f"""You are Junky, a music expert and witty Discord bot.
+You are generating a personalized song recommendation for {display_name} (@{username}) based on their REAL Spotify listening history:
+
+User's Spotify History:
+- Favorite Genres: {genres_str}
 - Top Artists: {artists_str}
-- Top Tracks: {tracks_str}
+- Most Played Tracks: {tracks_str}
 
-Your job: Pick a song from Spotify that gives a personalized, clever, or funny recommendation tailored to their real music taste.
-You can either recommend a song that matches their vibe perfectly, or make a playful humorous comment about their top artists/tracks.
+Your Mission:
+1. Deeply analyze their music taste, favorite genres, and musical vibes from the list above.
+2. Recommend a FRESH, fantastic song that perfectly fits their musical taste (like an artist they'd love, a related banger, or a hidden gem).
+3. Important: Do NOT pick a song already listed in their Top Tracks — pick something new for them to discover!
+4. Write a witty, clever 10-15 word comment connecting the song to their favorite artists/genres.
 
-Rules:
-- Pick a REAL song that exists on Spotify
-- ANTI-REPETITION: Do NOT pick generic or repetitive songs. Be fresh, bold, and unique!
-- Write a short witty one-liner (max 15 words) explaining why this song fits their taste or vibe
-- Prefer popular/well-known songs so they're easy to find on Spotify
-
-Respond ONLY with valid JSON, no markdown, no code fences:
-{{"search_query": "song name artist name", "message": "your witty one-liner here"}}"""
+Respond ONLY with valid JSON:
+{{"search_query": "Song Title Artist Name", "message": "your witty commentary here"}}"""
     else:
-        prompt = f"""You are a funny Discord music bot. A user just tagged someone with the following Discord profile:
-- Display name: "{display_name}"
-- Username: "{username}"
-
-Your job: Pick a song from Spotify that is funny, ironic, or fitting for this person based on their name, personality vibe, or wordplay.
+        prompt = f"""You are a witty Discord music bot. A user tagged {display_name} (@{username}).
+Pick a funny, ironic, or fitting song for this person based on their name, personality vibe, or clever wordplay.
 
 Rules:
 - Pick a REAL song that exists on Spotify
-- ANTI-REPETITION: NEVER pick generic songs with the user's name as the title. Explore diverse genres (Bollywood, Punjabi, Hip-Hop, Pop, Rock, Memes, Anime, Classics).
-- The song should be funny, sarcastic, or clever
+- Avoid generic songs with the user's name as the title — explore diverse genres (Bollywood, Punjabi, Hip-Hop, Pop, Rock, Memes, Anime).
 - Write a short witty one-liner (max 15 words) explaining why this song fits them
-- Prefer popular/well-known songs so they're easy to find on Spotify
 
-Respond ONLY with valid JSON, no markdown, no code fences:
-{{"search_query": "song name artist name", "message": "your witty one-liner here"}}"""
+Respond ONLY with valid JSON:
+{{"search_query": "Song Title Artist Name", "message": "your witty one-liner here"}}"""
 
     try:
         response = await gemini_client.aio.models.generate_content(
             model="gemini-flash-latest",
             contents=prompt,
             config=types.GenerateContentConfig(
-                temperature=1.2,
+                temperature=1.0,
                 response_mime_type="application/json",
             ),
         )
@@ -279,7 +282,7 @@ Respond ONLY with valid JSON, no markdown, no code fences:
         print(f"Gemini error: {e}")
         return {
             "search_query": display_name,
-            "message": "AI took a nap, but here's a track for you! 🤷",
+            "message": "AI took a nap, but here's what Spotify found! 🤷",
         }
 
 
