@@ -534,20 +534,20 @@ async def handle_home(request: web.Request) -> web.Response:
     return web.Response(text=html, content_type="text/html")
 
 
-# ==========================================
-# 6. Main Entrypoint
-# ==========================================
 async def main():
     # Setup OAuth Callback Web Server
     app = web.Application()
     app.router.add_get("/", handle_home)
     app.router.add_get("/callback", handle_spotify_callback)
 
+    port = int(os.getenv("PORT", 8888))
+    host = "0.0.0.0"
+
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 8888)
+    site = web.TCPSite(runner, host, port)
     await site.start()
-    print("Spotify OAuth server running on http://127.0.0.1:8888")
+    print(f"Spotify OAuth server running on http://{host}:{port}")
 
     # Start Discord Bot
     async with bot:
